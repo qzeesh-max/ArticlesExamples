@@ -3,11 +3,7 @@
 
 #pragma once 
 #include <algorithm>
-#ifdef __APPLE__
-#include <machine/endian.h>
-#else
-#include <endian.h>
-#endif
+
 #include <iostream>
 #include <list>
 #include <sstream>

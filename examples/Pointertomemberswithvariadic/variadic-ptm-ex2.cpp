@@ -104,7 +104,7 @@ int main(void)
     TestsSet Tests2;
 
     for (int i = 0; i <5000; i++)
-        Tests2.insert(Test(i/10, (5000-i)/5 , i/50, random()/3.92));
+        Tests2.insert(Test(i/10, (5000-i)/5 , i/50, rand()/3.92));
 
 
     for (TestsSet::const_iterator it = Tests2.begin(), end = Tests2.end(); it!=end; ++it)

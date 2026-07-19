@@ -1,8 +1,10 @@
 #include <algorithm>
+#ifndef _WIN32
 #ifdef __APPLE__
 #include <machine/endian.h>
 #else
 #include <endian.h>
+#endif
 #endif
 #include <iostream>
 #include <limits>
@@ -25,7 +27,8 @@ private:
 
     struct color_and_count_t
     {
-#if __BYTE_ORDER == __BIG_ENDIAN
+#if (defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__) || \
+    (defined(__BYTE_ORDER) && defined(__BIG_ENDIAN) && __BYTE_ORDER == __BIG_ENDIAN)
         color_t Color : 1;
         unsigned int Count : 31;
 #else // Assume little endian in other cases

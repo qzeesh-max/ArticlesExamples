@@ -97,7 +97,7 @@ int main(void)
     vector<Test> Tests;
 
     for (int i = 0; i <5000; i++)
-        Tests.push_back(Test(i/10, (5000-i)/5 , i/50, random()/3.92));
+        Tests.push_back(Test(i/10, (5000-i)/5 , i/50, rand()/3.92));
 
     sort(Tests.begin(), Tests.end(), Ascending_Compare(&Test::a, &Test::b, &Test::c, &Test::d));
 

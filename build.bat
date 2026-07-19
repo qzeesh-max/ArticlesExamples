@@ -21,7 +21,8 @@ if %ERRORLEVEL% neq 0 (
 )
 
 set BASE_DIR=%~dp0
-set BUILD_DIR=%BASE_DIR%build
+if "%BASE_DIR:~-1%"=="\" set BASE_DIR=%BASE_DIR:~0,-1%
+set BUILD_DIR=%BASE_DIR%\build
 
 if not exist "%BUILD_DIR%" (
     echo Creating build directory: %BUILD_DIR%

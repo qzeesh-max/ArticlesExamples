@@ -7,10 +7,10 @@
 #include <mutex>
 #else
 #include <boost/thread.hpp>
-#include <atomic>
-
 using namespace boost;
 #endif
+#include <atomic>
+
 
 using namespace std;
 

@@ -1,0 +1,958 @@
+# Indexing into Associative Containers and Augmented Red-Black Trees
+
+*September 22^nd, 2012 By Zeeshan Qazi*
+
+**STL** – **S**tandard **T**emplate **L**ibrary is a well-known library from point of view of an experienced C++ Software Engineer. It is an extremely useful library providing many different types of *generic* containers and many other useful classes, functions and algorithms that may be *specialized* to fit the purpose of the programmer utilizing them. The wide scope of STL and genericity of classes and algorithms implemented in it makes it very useful for the common C++ Software Engineer, as s/he does not have to dedicate any time implementing these constructs that form foundation of many programs.
+
+Though most of the containers in the STL library are highly customizable in the sense that they provide you not only the ability to specify storage types of what is stored in them, but also a comparison functor and an allocator, they are not magical and they certainly do not provide you everything that you could possibly need to have. STL library is absolutely great and seemingly efficient for most user applications, but it's implementation of generic containers are designed more for portability, ease of use, and for providing ability to customize. The drawback of providing these benefits is that some STL container implementations have inefficiencies, which you will not find in the *Linux Kernel's* implementation of similar containers.
+
+As an example of such an inefficiency if you look at the STL `map` container implementation that is part of the GNU C++ framework, you will notice that each tree node basically has an `enum` typed member used to store the color of the node in the Red-Black tree. If you were to use the `sizeof` operator on that member of the node class, you will notice that it is 32 bits on most platforms, though essentially only single bit is being used in that node to store the color of the node from the point of view of the Red-Black tree. If you were to look for a similar container in the *Linux Kernel*, you will find that the *Linux Kernel* implementation makes use of the fact that their nodes will always be word aligned and therefore they store the color of a node in the least significant bit of the pointer to the parent of the node.
+
+STL presently does not provide any mechanism for generically augmenting the nodes in their containers, making it impossible for the users of the containers to gain access to the node class or instances of the node class. This limitation is not necessarily a bad thing, but we will soon be getting to the point as to why we want to implement our own Red-Black tree that uses almost the same amount of memory and almost the same structure as the `std::map` with some added functionality that could have been added to the STL map container without changing the complexity of the STL container, and with really minimal overhead to the container itself.
+
+So let us look at a problem and see how we can solve this problem using the existing standard containers that are found in the STL library. We want to design a program that would be constantly keeping track of all the flights anywhere on the planet for the entire lifetime of each of them each day, from the time of the flight being scheduled to its completion or cancellation. Let us assume that number of flights each day at any given time are in the order of magnitude 10^5. We want to display these flights in a single scrollable window, and we want the ability to sort or filter these flights using a variety of traits associated with a flight such as scheduled time, airline name, flight number, tail sign, present status, current geographical coordinates etc. Let us assume that we have decided to use `std::map` as a container in memory where it would be updated using a real-time feed from our vendor, and that we are keying that container off the flight number.
+
+Now without going into too much of a detail about how we plan to sort or filter these flights, let us simplify the problem. Let us assume that we are presently only displaying the flights sorted by the flight number. We know that `std::map` is a Red-Black tree, which happens to be a type of *nearly balanced* Binary Tree, with fairly decent complexity guarantees for inserting, searching, and removing elements. But in order to display these 10^5 records in a scrollable window with 70 of these showing at a time while the container may change dynamically behind us, or the user has the ability to click on the scroll to move to a random position in the container, we run into a dilemma related to the complexity of providing such an operation using the `std::map` container.
+
+STL provides a function called `std::advance` which may be used to advance an `iterator` by an arbitrary value. For some containers this operation is only *O(1)* complexity, but for our `std::map` this operation is *O(n)* complexity, where *n* is the number of elements to advance by. If we were to use this function to allow scrolling of our window and picking up elements to display in the window, we run into massive inefficiency considering the number of records we are intending to display through our window. It simply becomes a big chore to scroll through the window.
+
+Some of us may think at this point that we are better of using a sorted `std::vector` where we can use *Binary Search* to find our elements, and the same *Binary Search* to insert elements in proper location if they needed insertion into the vector. It sounds well and good from the point of view of providing random access in the *O(1)* complexity, but our insertions for this container are of *O(n)* complexity, where as our `std::map` provided the same operation for *O(log_2 n)* complexity. So if we use `std::map` we are effectively being subjected to a massive penalty everytime we were to scroll by a significant amount, and if we were to use the `std::vector` we are effectively being subjected to a penalty on every insertion into the vector.
+
+Now let us assume that it is unacceptable to those deciding the requirements of our project to have either of the two penalties suffered by our application. They want the application to be very responsive regardless of the number of records and they can somewhat guarantee that number of records will reasonable stay in the magnitude of 10^5. We have a dilemma, because our STL containers do not really provide us any such ability right out of the box to provide a reasonable mechanism for not only doing insertion, searches and deletions in *O(log_2n)* or better, but also randomly indexing into the contents of the container in similar timeframe.
+
+I was wondering about a problem a bit more complex than the one described above, and decided to explore the properties of the Red-Black tree myself. Though the problem I was looking at was not in a C++ program but in another language, that language also provides similar containers to those found in STL. While exploring the properties of the Red-Black tree I stumbled upon a little known property of the Red-Black tree, which would enable us to gain random access to any element in the tree by its position by its rank from the beginning in *O(log_2 n)* complexity. I basically found that if I were to embed in every node of the tree number of children that node it had, it was possible to find an element by its position based on its rank from the beginning of the tree. Then, I decided to search the literature to see if this property has ever been documented before, and sure enough I found the property mentioned in Chapter 14 of [Introduction to Algorithms](https://www.amazon.com/dp/0262033844/).
+
+As stated above we will need to add a counter to each node to keep count of the node itself and all its children. We will need to take into consideration the following operations while implementing this augmentation to our Red-Black tree:- **Insertion of new nodes** – We will need to modify the traditional *BST Insert* to add additional logic to update all the parent nodes along the path of a successful insertion to increment the counter in each node.- **Deletion of a node** – We will need to modify the traditional *BST Delete* to to add additional logic to update all the parent nodes along the path of a sucessful deletion to decrement the counter in each node.- **Rotations / House-keeping on insertion or deletion** – We will need to modify the pivot operations that are done to keep the Red-Black tree maintain the definition of Red-Black tree.
+
+We will be keeping nearly the same structure for the nodes that is utilized by most `std::map` implementations except that we would no longer be wasting the 31 bits per node in the `color` containing member. We will instead use that member to store the color and the count of children and the parent. We will achieve this by using bit-fields in a custom structure that will replace the `color` enumeration.
+
+We will now walkthrough the implementation of our augmented Red-Black tree, which we are calling `IndexedMap`. We will be sequntially going through implementation of the simplest structures to the most complex structures in our implementation, therefore the code is not going to be presented in order it was implemented in my test program, but line numbers will give you the idea of the order of the actual implementation. The reason we cannot give you the code in order is because we have embedded classes that are simpler structures than the classes they are embedded in. Our implementation is simplified for the scope of this article and we are not supporting custom comparators nor custom allocators in our implementation. Let us first start with the include files we will need for our example.
+
+`
+- #include &lt;algorithm&gt;
+- **2** `#include `
+- **3** `#include `
+- **4** ``
+`
+
+We will now look at how we plan to store the color and the count for each node. We will be using just a one bit in the structure to store the color, while the rest of the 31 bits to store the count. By doing this we will be utilizing the same amount of memory per node as the `std::map`, while providing the additional functionality mentioned above.
+
+`
+- **9** `enum child_t`
+- **10** `{`
+- **11** `LEFT,`
+- **12** `RIGHT,`
+- **13** `};`
+- **14** ``
+- **15** `enum color_t`
+- **16** `{`
+- **17** `BLACK,`
+- **18** `RED,`
+- **19** `};`
+- **20** ``
+- **21** `struct color_and_count_t`
+- **22** `{`
+- **23** `#if __BYTE_ORDER == __BIG_ENDIAN`
+- **24** `color_t Color : 1;`
+- **25** `unsigned int Count : 31;`
+- **26** `#else // Assume little endian in other cases`
+- **27** `unsigned int Count : 31;`
+- **28** `color_t Color : 1;`
+- **29** `#endif`
+- **30** ``
+- **31** `};`
+- **32** ``
+- **33** `struct Node`
+- **34** `{`
+- **35** `color_and_count_t ColorAndCount;`
+- **36** `Node* children[2];`
+- **37** `Node* parent;`
+- **38** `std::pair keyvalue;`
+- **39** ``
+- **40** ``
+- **41** `Node()`
+- **42** `{`
+- **43** `ColorAndCount.Color = RED;`
+- **44** `ColorAndCount.Count = 0;`
+- **45** `children[LEFT] = children[RIGHT] = NULL;`
+- **46** `parent = NULL;`
+- **47** `}`
+- **48** ``
+- **49** `Node(color_t _color,`
+- **50** `Node* _leftChild,`
+- **51** `Node* _rightChild,`
+- **52** `Node* _parent,`
+- **53** `int _count,`
+- **54** `const std::pair& _keyvalue):`
+- **55** `children({_leftChild, _rightChild}),`
+- **56** `parent(_parent),`
+- **57** `keyvalue(_keyvalue)`
+- **58** `{`
+- **59** `ColorAndCount.Color = _color;`
+- **60** `ColorAndCount.Count = _count;`
+- **61** `}`
+- **62** ``
+- **63** ``
+- **64** `~Node()`
+- **65** `{`
+- **66** `if (children[LEFT])`
+- **67** `delete children[LEFT];`
+- **68** ``
+- **69** `if (children[RIGHT])`
+- **70** `delete children[RIGHT];`
+- **71** `}`
+- **72** ``
+- **73** `bool IsLeftChild() const`
+- **74** `{`
+- **75** `return parent && (parent->children[LEFT]==this);`
+- **76** `}`
+- **77** ``
+- **78** `bool IsRightChild() const`
+- **79** `{`
+- **80** `return parent && (parent->children[RIGHT]==this);`
+- **81** `}`
+- **82** ``
+- **83** `Node * GetGrandParent() const`
+- **84** `{`
+- **85** `return parent ? parent->parent : NULL;`
+- **86** `}`
+- **87** ``
+- **88** `Node * GetUncle() const`
+- **89** `{`
+- **90** `Node * GrandParent = GetGrandParent();`
+- **91** ``
+- **92** `if (GrandParent==NULL)`
+- **93** `return NULL;`
+- **94** ``
+- **95** `// return the sibling of the parent`
+- **96** `return GrandParent->children[parent->IsLeftChild()];`
+- **97** `}`
+- **98** ``
+- **99** `Node * GetSibling() const`
+- **100** `{`
+- **101** `if (parent==NULL)`
+- **102** `return NULL;`
+- **103** ``
+- **104** `return parent->children[IsLeftChild()];`
+- **105** `}`
+- **106** ``
+- **107** ``
+- **108** `void PivotLeft(Node*& root)`
+- **109** `{`
+- **110** `Node * temp = children[RIGHT];`
+- **111** ``
+- **112** `int iTopCount = ColorAndCount.Count,`
+- **113** `iMiddleCount = temp->ColorAndCount.Count,`
+- **114** `iBottomCount = temp->children[LEFT] ? temp->children[LEFT]->ColorAndCount.Count : 0;`
+- **115** ``
+- **116** `children[RIGHT] = temp->children[LEFT];`
+- **117** ``
+- **118** `if (temp->children[LEFT]!=NULL)`
+- **119** `temp->children[LEFT]->parent = this;`
+- **120** ``
+- **121** `temp->parent = parent;`
+- **122** ``
+- **123** `if (temp->parent==NULL)`
+- **124** `root = temp;`
+- **125** `else`
+- **126** `parent->children[!this->IsLeftChild()] = temp;`
+- **127** ``
+- **128** `temp->children[LEFT] = this;`
+- **129** `parent = temp;`
+- **130** ``
+- **131** `temp->ColorAndCount.Count = iTopCount;`
+- **132** `ColorAndCount.Count = iTopCount - iMiddleCount + iBottomCount;`
+- **133** `}`
+- **134** ``
+- **135** `void PivotRight(Node*& root)`
+- **136** `{`
+- **137** `Node * temp = children[LEFT];`
+- **138** ``
+- **139** `int iTopCount = ColorAndCount.Count,`
+- **140** `iMiddleCount = temp->ColorAndCount.Count,`
+- **141** `iBottomCount = temp->children[RIGHT] ? temp->children[RIGHT]->ColorAndCount.Count : 0;`
+- **142** ``
+- **143** `children[LEFT] = temp->children[RIGHT];`
+- **144** ``
+- **145** `if (temp->children[RIGHT]!=NULL)`
+- **146** `temp->children[RIGHT]->parent = this;`
+- **147** ``
+- **148** `temp->parent = parent;`
+- **149** ``
+- **150** `if (temp->parent==NULL)`
+- **151** `root = temp;`
+- **152** `else`
+- **153** `parent->children[!this->IsLeftChild()] = temp;`
+- **154** ``
+- **155** `temp->children[RIGHT] = this;`
+- **156** `parent = temp;`
+- **157** ``
+- **158** `temp->ColorAndCount.Count = iTopCount;`
+- **159** `ColorAndCount.Count = iTopCount - iMiddleCount + iBottomCount;`
+- **160** ``
+- **161** `}`
+- **162** ``
+- **163** `Node * Minimum()`
+- **164** `{`
+- **165** `Node * iterator = this;`
+- **166** ``
+- **167** `while (iterator->children[LEFT]!=NULL)`
+- **168** `iterator = iterator->children[LEFT];`
+- **169** ``
+- **170** `return iterator;`
+- **171** `}`
+- **172** ``
+- **173** `Node * Maximum()`
+- **174** `{`
+- **175** `Node * iterator = this;`
+- **176** ``
+- **177** `while (iterator->children[RIGHT]!=NULL)`
+- **178** `iterator = iterator->children[RIGHT];`
+- **179** ``
+- **180** `return iterator;`
+- **181** ``
+- **182** `}`
+- **183** ``
+- **184** `Node * Successor()`
+- **185** `{`
+- **186** `if (children[RIGHT]!=NULL)`
+- **187** `return children[RIGHT]->Minimum();`
+- **188** ``
+- **189** `Node * iterator = parent;`
+- **190** `Node * node = this;`
+- **191** ``
+- **192** `while ((iterator!=NULL) && (node==iterator->children[RIGHT]))`
+- **193** `{`
+- **194** `node = iterator;`
+- **195** `iterator = iterator->parent;`
+- **196** `}`
+- **197** ``
+- **198** `return iterator;`
+- **199** ``
+- **200** `}`
+- **201** ``
+- **202** ``
+- **203** `Node * Predecessor()`
+- **204** `{`
+- **205** `if (children[LEFT]!=NULL)`
+- **206** `return children[LEFT]->Maximum();`
+- **207** ``
+- **208** `Node * iterator = parent;`
+- **209** `Node * node = this;`
+- **210** ``
+- **211** `while ((iterator!=NULL) && (node==iterator->children[LEFT]))`
+- **212** `{`
+- **213** `node = iterator;`
+- **214** `iterator = iterator->parent;`
+- **215** `}`
+- **216** ``
+- **217** `return iterator;`
+- **218** ``
+- **219** `}`
+- **220** ``
+- **221** ``
+- **222** `};`
+- **223** ``
+`
+
+Now that we have declared our Node, you can see above our choice of using a statically sized array for children instead of using a separate left and right member for the children. The rationale behind this is to reduce the need for having `**if**` branches just for choosing the side. We will instead use the return values from other functions to decide whether to go to left or right as often as possible.
+
+Let us move on to defining the Red-Black tree using our Node class above. We would be using the algorithm for Red-Black tree found on the [wikipedia](https://en.wikipedia.org/wiki/Red_black_tree). For rotation in the Node class we are using the Tree rotation algorithm found [here](https://en.wikipedia.org/wiki/Tree_rotation) with modifications to support our augmentation to the structure. The pseudocode for the general Red-Black tree as well as the one identical to our augmented variant can also be found in Chapter 14 and Chapter 15 of [Introductions to Algorithms](https://www.amazon.com/dp/0262033844/) respectively.
+
+Let us proceed with the definition of the `Iterator` class, which is a member class inside our `IndexedMap` member class. This class represents a bidirectional iterator with one restriction that once you hit the end node, you cannot iterate backwards from that point. As mentioned before we are not exhibiting our code in the exact sequence it needs to be in the file, but in the order it was actually developed. The iterator is just a thin wrapper around our `Node` class.
+
+`
+- **315** `class Iterator`
+- **316** `{`
+- **317** `protected:`
+- **318** `Node * node;`
+- **319** ``
+- **320** `public:`
+- **321** `Iterator(Node* _node):`
+- **322** `node(_node)`
+- **323** `{`
+- **324** `}`
+- **325** ``
+- **326** `bool operator==(const Iterator& other) const`
+- **327** `{`
+- **328** `return node==other.node;`
+- **329** `}`
+- **330** ``
+- **331** `bool operator!=(const Iterator& other) const`
+- **332** `{`
+- **333** `return node!=other.node;`
+- **334** `}`
+- **335** ``
+- **336** `std::pair& operator*()`
+- **337** `{`
+- **338** `return node->keyvalue;`
+- **339** `}`
+- **340** ``
+- **341** `std::pair* operator->()`
+- **342** `{`
+- **343** `return &node->keyvalue;`
+- **344** `}`
+- **345** ``
+- **346** `Iterator operator++()`
+- **347** `{`
+- **348** `Node * iterator = node->Successor();`
+- **349** ``
+- **350** `return Iterator(node = iterator);`
+- **351** `}`
+- **352** ``
+- **353** ``
+- **354** `Iterator operator++(int)`
+- **355** `{`
+- **356** `Node * oldNode = node;`
+- **357** `Node * iterator = node->Successor();`
+- **358** ``
+- **359** `node = iterator;`
+- **360** ``
+- **361** `return Iterator(oldNode);`
+- **362** `}`
+- **363** ``
+- **364** `Iterator operator--()`
+- **365** `{`
+- **366** `Node * iterator = node->Predeccesor();`
+- **367** ``
+- **368** `return Iterator(node = iterator);`
+- **369** `}`
+- **370** ``
+- **371** `Iterator operator--(int)`
+- **372** `{`
+- **373** `Node * oldNode = node;`
+- **374** `Node * iterator = node->Predecessor();`
+- **375** ``
+- **376** `node = iterator;`
+- **377** ``
+- **378** `return Iterator(oldNode);`
+- **379** `}`
+- **380** ``
+- **381** `template`
+- **382** `friend class ::IndexedMap;`
+- **383** `};`
+`
+
+Now that we have defined our iterator let us go through the rest of our implementation of the `IndexedMap` template class. The code is commented to aid in interpretation where such interpretation is required. This time we would mark the sections of the code that we have already covered. You will notice that both the Insertion and Deletion logic has been modified to update the descendant counts on each node. We have also added additional functions to cover additional features. Those functions will be covered further down in this article.
+
+[   Download](javascript:DoLink('/download-sourcecode.php?Example=augmented-rbt-ex1');)
+   Compilation Instructions:  g++ augmented-rbt-ex1.cpp -o augmented-rbt-ex1
+
+`
+- **5** `template `
+- **6** `class IndexedMap`
+- **7** `{`
+- **8** `private:`
+- **** `Implementation of our **Node** class goes here.`
+- **223** ``
+- **224** `Node * root, * leftMost, *rightMost;`
+- **225** ``
+- **226** `private:`
+- **227** `// We are disabling the copy constructor, moving constructor, assignment operator, and the moving operator for scope of this implementation`
+- **228** `IndexedMap(const IndexedMap&) {}`
+- **229** `IndexedMap(const IndexedMap&&) {}`
+- **230** ``
+- **231** `IndexedMap& operator=(const IndexedMap&) {return *this;}`
+- **232** `IndexedMap& operator=(const IndexedMap&&) {return *this;}`
+- **233** ``
+- **234** `private:`
+- **235** `// Basic BST Tree insertion, we only need this to be a static function`
+- **236** `static bool Insert(Node *& _root, const std::pair& _keyvalue, Node * _parent, Node*& _created)`
+- **237** `{`
+- **238** `if (_root==NULL)`
+- **239** `{`
+- **240** `_created = _root = new Node(RED, NULL, NULL, _parent, 1, _keyvalue);`
+- **241** ``
+- **242** `return true;`
+- **243** `}`
+- **244** ``
+- **245** `if (_root->keyvalue.first == _keyvalue.first)`
+- **246** `return false;`
+- **247** ``
+- **248** `bool ret = Insert(_root->children[_keyvalue.first > _root->keyvalue.first],`
+- **249** `_keyvalue,`
+- **250** `_root,`
+- **251** `_created);`
+- **252** ``
+- **253** `if (ret)`
+- **254** `_root->ColorAndCount.Count++;`
+- **255** ``
+- **256** `return ret;`
+- **257** `}`
+- **258** ``
+- **259** `Node * Find(const Key& key, Node * iterator)`
+- **260** `{`
+- **261** `while (iterator!=NULL)`
+- **262** `if (iterator->keyvalue.first==key)`
+- **263** `return iterator;`
+- **264** `else`
+- **265** `iterator = iterator->children[!(key keyvalue.first)];`
+- **266** ``
+- **267** `return iterator;`
+- **268** `}`
+- **269** ``
+- **270** `Node * FindWithIndex(const Key& key, Node * iterator, int& index)`
+- **271** `{`
+- **272** `// If we have a child on the left, we will start with count of descendants on the left,`
+- **273** `// otherwise: we will start with count of 0`
+- **274** `if (iterator->children[LEFT]!=NULL)`
+- **275** `index = iterator->children[LEFT]->ColorAndCount.Count;`
+- **276** `else`
+- **277** `index = 0;`
+- **278** ``
+- **279** `while (iterator!=NULL)`
+- **280** `{`
+- **281** `if (iterator->keyvalue.first==key)`
+- **282** `return iterator;`
+- **283** `else`
+- **284** `{`
+- **285** `bool takeLeft;`
+- **286** ``
+- **287** `if (!(iterator = iterator->children[!(takeLeft=(key keyvalue.first))]))`
+- **288** `{`
+- **289** `index = NotFound;`
+- **290** `return iterator;`
+- **291** `}`
+- **292** ``
+- **293** `if (takeLeft)`
+- **294** `{`
+- **295** `index--;`
+- **296** ``
+- **297** `if (iterator->children[RIGHT]!=NULL)`
+- **298** `index -= iterator->children[RIGHT]->ColorAndCount.Count;`
+- **299** `} else {`
+- **300** `index++;`
+- **301** ``
+- **302** `if (iterator->children[LEFT]!=NULL)`
+- **303** `index += iterator->children[LEFT]->ColorAndCount.Count;`
+- **304** `}`
+- **305** `}`
+- **306** `}`
+- **307** ``
+- **308** `if (iterator==NULL)`
+- **309** `index = NotFound;`
+- **310** ``
+- **311** `return iterator;`
+- **312** `}`
+- **313** ``
+- **314** `public:`
+- **** `Implementation of our **Iterator** class goes here.`
+- **384** ``
+- **385** `public:`
+- **386** `static const int NotFound = -1;`
+- **387** `public:`
+- **388** `IndexedMap() : root(NULL), leftMost(NULL), rightMost(NULL)`
+- **389** `{`
+- **390** `}`
+- **391** ``
+- **392** `~IndexedMap()`
+- **393** `{`
+- **394** `if (root)`
+- **395** `delete root;`
+- **396** `}`
+- **397** ``
+- **398** `Iterator begin() const { return Iterator(leftMost); }`
+- **399** `Iterator end() const { return Iterator(NULL); }`
+- **400** ``
+- **401** `int size() const`
+- **402** `{`
+- **403** `if (root!=NULL)`
+- **404** `return root->ColorAndCount.Count;`
+- **405** `return 0;`
+- **406** `}`
+- **407** ``
+- **408** ``
+- **409** `Iterator Find(const Key& key)`
+- **410** `{`
+- **411** `return Iterator(Find(key, root));`
+- **412** `}`
+- **413** ``
+- **414** `Iterator FindWithIndex(const Key& key, int& index)`
+- **415** `{`
+- **416** `return Iterator(FindWithIndex(key, root, index));`
+- **417** `}`
+- **418** ``
+- **419** `Iterator GetByIndex(int index)`
+- **420** `{`
+- **421** `Node * iterator = root;`
+- **422** `int Counter;`
+- **423** ``
+- **424** `// If we have a child on the left, we will start with count of descendants on the left,`
+- **425** `// otherwise: we will start with count of 0`
+- **426** `if (iterator->children[LEFT]!=NULL)`
+- **427** `Counter = iterator->children[LEFT]->ColorAndCount.Count;`
+- **428** `else`
+- **429** `Counter = 0;`
+- **430** ``
+- **431** `while ((iterator!=NULL) && (Counter!=index))`
+- **432** `{`
+- **433** `// If the current going counter is less than the index we are looking for, then`
+- **434** `// we would descend into our descendants on the right.`
+- **435** `if (Counter children[RIGHT];`
+- **441** ``
+- **442** `// Every time we descend to the descendant on the right, we would add to the counter all its descendants on the left.`
+- **443** `if (iterator->children[LEFT]!=NULL)`
+- **444** `Counter += iterator->children[LEFT]->ColorAndCount.Count;`
+- **445** `} else {`
+- **446** `// otherwise: we will descend on the left`
+- **447** ``
+- **448** `// every time we descend on the left, we would decrease the counter.`
+- **449** `Counter--;`
+- **450** ``
+- **451** `iterator = iterator->children[LEFT];`
+- **452** ``
+- **453** `// Every time we descend on the left, we would decrease the counter by the count of all the descendants on the right.`
+- **454** `if (iterator->children[RIGHT]!=NULL)`
+- **455** `Counter -= iterator->children[RIGHT]->ColorAndCount.Count;`
+- **456** `}`
+- **457** `}`
+- **458** ``
+- **459** `// When we exit the loop either we have iterator for the item at the rank, or end().`
+- **460** `return Iterator(iterator);`
+- **461** `}`
+- **462** ``
+- **463** ``
+- **464** ``
+- **465** `Iterator Delete(const Iterator& it)`
+- **466** `{`
+- **467** `Iterator nextNode(it);`
+- **468** `Node* iterator = it.node, * workingNode = iterator, * substitute = NULL,* substituteParent = NULL;`
+- **469** ``
+- **470** `// Record the next node in the tree to return to the caller.`
+- **471** `nextNode++;`
+- **472** ``
+- **473** `// Update all the ancestors to exclude this child.`
+- **474** `while (workingNode!=NULL)`
+- **475** `{`
+- **476** `workingNode->ColorAndCount.Count--;`
+- **477** ``
+- **478** `workingNode = workingNode->parent;`
+- **479** `}`
+- **480** ``
+- **481** `// We shall start with the node the user wishes to delete.`
+- **482** `workingNode = iterator;`
+- **483** ``
+- **484** `// If there is no child on the left, it means we may have one child:`
+- **485** `if (workingNode->children[LEFT] == NULL)`
+- **486** `{`
+- **487** `// we will take that child as the node to substitute the node being removed from the B-Tree.`
+- **488** `substitute = workingNode->children[RIGHT];`
+- **489** `} else`
+- **490** `{`
+- **491** `// If there is no child on the right, then we may have a child on the left:`
+- **492** `if (workingNode->children[RIGHT] == NULL)`
+- **493** `{`
+- **494** `// we will take that child as the node to substitute the node being removed from the B-Tree.`
+- **495** `substitute = workingNode->children[LEFT];`
+- **496** `} else {`
+- **497** `// otherwise: we will try to find the descendant with the lowest key greater than ours.`
+- **498** `workingNode = workingNode->children[RIGHT];`
+- **499** ``
+- **500** `while (workingNode->children[LEFT] != NULL)`
+- **501** `workingNode = workingNode->children[LEFT];`
+- **502** ``
+- **503** `// workingNode will now contain the node that will replace the node being deleted.`
+- **504** `// substitute will contain its right child`
+- **505** `substitute = workingNode->children[RIGHT];`
+- **506** `}`
+- **507** `}`
+- **508** ``
+- **509** `// If the node we are working on is not the one that was meant to be deleted:`
+- **510** `// (essentially this is the case where the node to be deleted had two children)`
+- **511** `if (workingNode != iterator)`
+- **512** `{`
+- **513** `/*`
+- **514** `Cases:`
+- **515** ``
+- **516** `Case 1:`
+- **517** ``
+- **518** ``
+- **519** `I                          W`
+- **520** `/ \                         /\`
+- **521** `L  R(*)        becomes:     L R(*)`
+- **522** `/                           /`
+- **523** `W                           S`
+- **524** `\`
+- **525** `S`
+- **526** ``
+- **527** `* R may represents a sub-tree, where W is the minimum of the sub-tree, and S is`
+- **528** `the right child of the sub-tree.`
+- **529** ``
+- **530** `Case 2:`
+- **531** ``
+- **532** `I                   W`
+- **533** `/\                  /\`
+- **534** `L W       becomes:  L  S`
+- **535** `\`
+- **536** `S`
+- **537** ``
+- **538** ``
+- **539** ``
+- **540** `*/`
+- **541** `// We will transfer the ownership of all the descendants on our left side to the lowest key`
+- **542** `// greater than ours.`
+- **543** `iterator->children[LEFT]->parent = workingNode;`
+- **544** ``
+- **545** `// We will record the Node count at this point to preserve our ability to search by rank, by`
+- **546** `// later on correctly adjusting the appropriate ancestors and/or descendants.`
+- **547** `int oldWorkingNodeCount = workingNode->ColorAndCount.Count;`
+- **548** `Node * itUpdateParent = workingNode->parent;`
+- **549** `int LeftChildrenCount = iterator->children[LEFT]->ColorAndCount.Count;`
+- **550** ``
+- **551** `// Since we are removing the "workingNode" from its portion of the tree, we need to`
+- **552** `// update all the parents to reflect this change.`
+- **553** `while (itUpdateParent!=iterator)`
+- **554** `{`
+- **555** `itUpdateParent->ColorAndCount.Count--;`
+- **556** `itUpdateParent = itUpdateParent->parent;`
+- **557** `}`
+- **558** ``
+- **559** `// Since the workingNode is adopting our descendants, we will give it the ownership of the count too.`
+- **560** `workingNode->ColorAndCount.Count += LeftChildrenCount;`
+- **561** ``
+- **562** `// make descendants on the left be the descendants of the working node.`
+- **563** `workingNode->children[LEFT] = iterator->children[LEFT];`
+- **564** ``
+- **565** `// if the workingNode is not the dying node's right child, then we can basically`
+- **566** `// move our right child to it's safely new minimum safely`
+- **567** `if (workingNode != iterator->children[RIGHT])`
+- **568** `{`
+- **569** `// Compute the count of the right children adjusted for the fact that we are taking away`
+- **570** `// the workingNode from the right tree.`
+- **571** `int RightChildrenCount = iterator->children[RIGHT]->ColorAndCount.Count - oldWorkingNodeCount + 1;`
+- **572** ``
+- **573** `workingNode->ColorAndCount.Count += RightChildrenCount;`
+- **574** ``
+- **575** `// Our former parent will adopt our child substitute.`
+- **576** `substituteParent = workingNode->parent;`
+- **577** ``
+- **578** ``
+- **579** `if (substitute)`
+- **580** `{`
+- **581** `substitute->parent = workingNode->parent;`
+- **582** `}`
+- **583** ``
+- **584** `workingNode->parent->children[LEFT] = substitute;`
+- **585** `workingNode->children[RIGHT] = iterator->children[RIGHT];`
+- **586** ``
+- **587** `iterator->children[RIGHT]->parent = workingNode;`
+- **588** `} else {`
+- **589** `// otherwise: we are the parent of substitute`
+- **590** `substituteParent = workingNode;`
+- **591** `}`
+- **592** ``
+- **593** `// check to see if the root is changing, otherwise place our new node`
+- **594** `// where the node being deleted was.`
+- **595** `if (root == iterator)`
+- **596** `root = workingNode;`
+- **597** `else`
+- **598** `iterator->parent->children[!iterator->IsLeftChild()] = workingNode;`
+- **599** ``
+- **600** `// The deleted node's parent becomes our new replacement node's parent`
+- **601** `workingNode->parent = iterator->parent;`
+- **602** ``
+- **603** `// swap color`
+- **604** `color_t tColor = workingNode->ColorAndCount.Color;`
+- **605** ``
+- **606** `workingNode->ColorAndCount.Color = iterator->ColorAndCount.Color;`
+- **607** `iterator->ColorAndCount.Color = tColor;`
+- **608** ``
+- **609** `workingNode = iterator;`
+- **610** `} else {`
+- **611** `// otherwise: we have at least one null child, and therefore our`
+- **612** `// substitute's parent will be our former parent`
+- **613** `substituteParent = workingNode->parent;`
+- **614** ``
+- **615** `// if we have one non-null child then that child's parent is our former parent.`
+- **616** `if (substitute)`
+- **617** `substitute->parent = workingNode->parent;`
+- **618** ``
+- **619** `// if we were the root, then our child is the new root, otherwise: our child is our`
+- **620** `// parent's child instead of us.`
+- **621** `if (root == iterator)`
+- **622** `root = substitute;`
+- **623** `else`
+- **624** `iterator->parent->children[!iterator->IsLeftChild()] = substitute;`
+- **625** ``
+- **626** `// if we were the leftMost child, then we need a new leftMost child for the tree.`
+- **627** `if (leftMost == iterator)`
+- **628** `{`
+- **629** `if (iterator->children[RIGHT] == NULL)`
+- **630** `leftMost = iterator->parent;`
+- **631** `else`
+- **632** `leftMost = substitute->Minimum();`
+- **633** `}`
+- **634** ``
+- **635** `// if we were the rightMost child, then we need a new rightMost child for the tree.`
+- **636** `if (rightMost == iterator)`
+- **637** `{`
+- **638** `if (iterator->children[LEFT] == NULL)`
+- **639** `rightMost = iterator->parent;`
+- **640** `else`
+- **641** `rightMost = substitute->Maximum();`
+- **642** `}`
+- **643** `}`
+- **644** ``
+- **645** `// Standard rebalancing algorithm from Wikipedia, adjusted to have NULL represent null-leaves, instead`
+- **646** `// of having actual leaves in place. So all checks for BLACK also check for NULL being there instead,`
+- **647** `// and vice versa for RED.`
+- **648** `if (workingNode->ColorAndCount.Color != RED)`
+- **649** `{`
+- **650** `// Wikipedia Case 1: only applies on a BLACK node,`
+- **651** `// and case 2 only applies when node is not root`
+- **652** `while (substitute != root && (substitute == NULL || substitute->ColorAndCount.Color == BLACK))`
+- **653** `// If we are a left child, we would move this`
+- **654** `// check that repeatedly occurs in Wikipedia`
+- **655** `// implementation to the top, so it is only done`
+- **656** `// once`
+- **657** `if (substituteParent->children[LEFT]==substitute)`
+- **658** `{`
+- **659** `// Case 2 from Wikipedia`
+- **660** `Node* sibling = substituteParent->children[RIGHT];`
+- **661** ``
+- **662** `if (sibling->ColorAndCount.Color == RED)`
+- **663** `{`
+- **664** `sibling->ColorAndCount.Color = BLACK;`
+- **665** `substituteParent->ColorAndCount.Color = RED;`
+- **666** ``
+- **667** `substituteParent->PivotLeft(root);`
+- **668** ``
+- **669** `sibling = substituteParent->children[RIGHT];`
+- **670** `}`
+- **671** ``
+- **672** `// Case 3 from Wikipedia`
+- **673** `if (((sibling->children[LEFT] == NULL) ||`
+- **674** `(sibling->children[LEFT]->ColorAndCount.Color == BLACK)) &&`
+- **675** `((sibling->children[RIGHT] == NULL) ||`
+- **676** `(sibling->children[RIGHT]->ColorAndCount.Color == BLACK)))`
+- **677** `{`
+- **678** `sibling->ColorAndCount.Color = RED;`
+- **679** `substitute = substituteParent;`
+- **680** `substituteParent = substituteParent->parent;`
+- **681** `// By not breaking out of the loop, we`
+- **682** `// go back to case 1`
+- **683** `} else {`
+- **684** `// Case 4 from Wikipedia, combined with`
+- **685** `// case 5`
+- **686** `if ((sibling->children[RIGHT] == NULL) ||`
+- **687** `(sibling->children[RIGHT]->ColorAndCount.Color == BLACK))`
+- **688** `{`
+- **689** `// This is from Case 5, eliminating shared if branches`
+- **690** `if (sibling->children[LEFT])`
+- **691** `sibling->children[LEFT]->ColorAndCount.Color = BLACK;`
+- **692** ``
+- **693** `// Case 4`
+- **694** `sibling->ColorAndCount.Color = RED;`
+- **695** ``
+- **696** `sibling->PivotRight(root);`
+- **697** `sibling = substituteParent->children[RIGHT];`
+- **698** `}`
+- **699** ``
+- **700** `// Remainder of Case 5`
+- **701** `sibling->ColorAndCount.Color = substituteParent->ColorAndCount.Color;`
+- **702** ``
+- **703** `substituteParent->ColorAndCount.Color = BLACK;`
+- **704** ``
+- **705** `if (sibling->children[RIGHT])`
+- **706** `sibling->children[RIGHT]->ColorAndCount.Color = BLACK;`
+- **707** ``
+- **708** `substituteParent->PivotLeft(root);`
+- **709** ``
+- **710** `break;`
+- **711** `}`
+- **712** `} else {`
+- **713** `// otherwise: We are right child, so our sibling is`
+- **714** `// on the left`
+- **715** ``
+- **716** `// Case 2 from Wikipedia`
+- **717** `Node* sibling = substituteParent->children[LEFT];`
+- **718** ``
+- **719** `if (sibling->ColorAndCount.Color == RED)`
+- **720** `{`
+- **721** `sibling->ColorAndCount.Color = BLACK;`
+- **722** `substituteParent->ColorAndCount.Color = RED;`
+- **723** `substituteParent->PivotRight(root);`
+- **724** `sibling = substituteParent->children[LEFT];`
+- **725** `}`
+- **726** ``
+- **727** `// Case 3 from Wikipedia`
+- **728** `if (((sibling->children[RIGHT] == NULL) ||`
+- **729** `(sibling->children[RIGHT]->ColorAndCount.Color == BLACK)) &&`
+- **730** `((sibling->children[LEFT] == NULL) ||`
+- **731** `(sibling->children[LEFT]->ColorAndCount.Color == BLACK)))`
+- **732** `{`
+- **733** `sibling->ColorAndCount.Color = RED;`
+- **734** `substitute = substituteParent;`
+- **735** `substituteParent = substituteParent->parent;`
+- **736** ``
+- **737** `// By not breaking out of the loop, we`
+- **738** `// go back to case 1`
+- **739** `} else {`
+- **740** `// Case 4 from Wikipedia, combined with`
+- **741** `// case 5`
+- **742** `if ((sibling->children[LEFT] == NULL) ||`
+- **743** `(sibling->children[LEFT]->ColorAndCount.Color == BLACK))`
+- **744** `{`
+- **745** ``
+- **746** `// This is from Case 5, eliminating shared if branches`
+- **747** `if (sibling->children[RIGHT])`
+- **748** `sibling->children[RIGHT]->ColorAndCount.Color = BLACK;`
+- **749** ``
+- **750** `// Case 4`
+- **751** `sibling->ColorAndCount.Color = RED;`
+- **752** `sibling->PivotLeft(root);`
+- **753** `sibling = substituteParent->children[LEFT];`
+- **754** `}`
+- **755** ``
+- **756** `// Remainder of Case 5`
+- **757** `sibling->ColorAndCount.Color = substituteParent->ColorAndCount.Color;`
+- **758** `substituteParent->ColorAndCount.Color = BLACK;`
+- **759** ``
+- **760** `if (sibling->children[LEFT])`
+- **761** `sibling->children[LEFT]->ColorAndCount.Color = BLACK;`
+- **762** ``
+- **763** `substituteParent->PivotRight(root);`
+- **764** `break;`
+- **765** `}`
+- **766** `}`
+- **767** `if (substitute)`
+- **768** `substitute->ColorAndCount.Color = BLACK;`
+- **769** `}`
+- **770** ``
+- **771** ``
+- **772** `workingNode = iterator;`
+- **773** ``
+- **774** ``
+- **775** ``
+- **776** `iterator->children[LEFT] = iterator->children[RIGHT] = NULL;`
+- **777** ``
+- **778** `delete iterator;`
+- **779** ``
+- **780** `return nextNode;`
+- **781** `}`
+- **782** ``
+- **783** `void Delete(const Iterator& first, const Iterator& last)`
+- **784** `{`
+- **785** `while (first!=last)`
+- **786** `{`
+- **787** `first = Delete(first);`
+- **788** `}`
+- **789** `}`
+- **790** ``
+- **791** `void Clear()`
+- **792** `{`
+- **793** `Delete(begin(), end());`
+- **794** `}`
+- **795** ``
+- **796** `std::pair Insert(std::pair keyvalue)`
+- **797** `{`
+- **798** `Node * iterator, *newNode;`
+- **799** ``
+- **800** `// Insert as we normally do into the BST tree`
+- **801** `if (!Insert(root, keyvalue, NULL, newNode))`
+- **802** `return std::make_pair(Iterator(newNode), false);`
+- **803** ``
+- **804** `// if the new insertion is the leftMost child then we must update our member containing`
+- **805** `// that node`
+- **806** `if (((leftMost!=NULL) && (leftMost->children[LEFT]==newNode)) || (leftMost==NULL))`
+- **807** `leftMost = newNode;`
+- **808** ``
+- **809** `// if the new insertion is the rightMost child then we must update our member containing`
+- **810** `// that node`
+- **811** `if (((rightMost!=NULL) && (rightMost->children[RIGHT]==newNode)) || (rightMost==NULL))`
+- **812** `rightMost = newNode;`
+- **813** ``
+- **814** `iterator = newNode;`
+- **815** ``
+- **816** ``
+- **817** `// Wikipedia - Red-Black Tree : Case 1`
+- **818** `while (true)`
+- **819** `{`
+- **820** `if (iterator->parent==NULL)`
+- **821** `{`
+- **822** `iterator->ColorAndCount.Color = BLACK;`
+- **823** `return std::make_pair(Iterator(newNode), true);`
+- **824** `} else {`
+- **825** `// Wikipedia - Red-Black Tree : Case 2`
+- **826** `if (iterator->parent->ColorAndCount.Color==BLACK)`
+- **827** `return std::make_pair(Iterator(newNode), true);`
+- **828** `else {`
+- **829** `// Wikipedia - Red-Black Tree : Case 3`
+- **830** `Node * Uncle = iterator->GetUncle(), * GrandParent;`
+- **831** ``
+- **832** `if ((Uncle!=NULL) && (Uncle->ColorAndCount.Color==RED))`
+- **833** `{`
+- **834** `iterator->parent->ColorAndCount.Color = BLACK;`
+- **835** `Uncle->ColorAndCount.Color = BLACK;`
+- **836** `GrandParent = iterator->GetGrandParent();`
+- **837** `GrandParent->ColorAndCount.Color = RED;`
+- **838** ``
+- **839** `iterator = GrandParent;`
+- **840** ``
+- **841** `continue;`
+- **842** `} else {`
+- **843** `// Wikipedia Red-Black Tree : Case 4`
+- **844** ``
+- **845** `if (iterator->IsRightChild() &&  iterator->parent->IsLeftChild())`
+- **846** `{`
+- **847** `iterator->parent->PivotLeft(root);`
+- **848** `iterator = iterator->children[LEFT];`
+- **849** `} else if (iterator->IsLeftChild() && iterator->parent->IsRightChild())`
+- **850** `{`
+- **851** `iterator->parent->PivotRight(root);`
+- **852** `iterator = iterator->children[RIGHT];`
+- **853** `}`
+- **854** ``
+- **855** `GrandParent = iterator->GetGrandParent();`
+- **856** ``
+- **857** `iterator->parent->ColorAndCount.Color = BLACK;`
+- **858** `GrandParent->ColorAndCount.Color = RED;`
+- **859** ``
+- **860** `if (iterator->IsLeftChild())`
+- **861** `GrandParent->PivotRight(root);`
+- **862** `else`
+- **863** `GrandParent->PivotLeft(root);`
+- **864** ``
+- **865** `return std::make_pair(Iterator(newNode), true);`
+- **866** ``
+- **867** `}`
+- **868** `}`
+- **869** `}`
+- **870** `}`
+- **871** ``
+- **872** ``
+- **873** `}`
+- **874** `};`
+- **875** ``
+`
+
+Now that we have defined our `IndexedMap` template class lets us go through the methods that this class supports:- `**begin()**`–This is the standard method for getting an iterator that corresponds to the first entry in the container.- `**end()**`–This is the standard method for getting an iterator that corresponds to the end of the container.- `**size()**`–This method returns the count of items in the container. It has a complexity of *O(1)* in our implementation as is the case for `std::map`.- `**Find()**`–This method finds an item in the container using the key provided, if the item is not found this function returns end() iterator. It has a complexity of *O(log_2 n)* in our implementation as is the case for `std::map`.- `**FindWithIndex()**`–This method finds an item in the container using the key provided, if the item is not found this function returns end() iterator. This function also provides you the index of the item in the container.It has a complexity of *O(log_2 n)* in our implementation, though this operation is not supported natively by `std::map`. Similar operation may be implemented using `std::map` by traversing the container from its beginning to the specific iterator returned by the `std:map::find` method with complexity of *O(n)*- `**GetByIndex()**`–This method gets an item at specific index, if the item is not found this function returns end() iterator. It has a complexity of *O(log_2 n)* in our implementation, though this operation is not supported natively by `std::map`. Similar operation may be implemented using `std::map` by traversing the container from its beginning to the node with desired index with complexity of *O(n)*- `**Delete()**`–The two variants of this method provide the user with the ability to delete an item using an iterator pointing to it or delete multiple items in iterator range (first, last]. It has a complexity of *O(log_2 n)*, which is the same as `std::map`. Our function performs more house-keeping operations, so it is just marginally slower.- `**Clear()**`– Clears all the nodes in our container.- `**Insert()**`–This method is used for inserting a compatible `std::pair` of key and value into our `IndexedMap`. It has a complexity of *O(log_2 n)*, which is the same as `std::map`. Our function performs more house-keeping operations, so it is just marginally slower.
+
+So in conclusion we have created an augmented Red-Black tree based map, facilitating ability to find items by index. This structure is very useful as a replacement for a sorted `**std::vector**` in C++, or a `**SortedDictionary**` in C#. This structure provides us *O(log_2 n)* inserts, which is much faster than traditional counter parts. It is possible to further extend these classes to support `allocators`, a `comparator` functor or even much greater things like dynamically changing the key and the sort of the elements. Our implementation has the same memory usage as `**std::map**`, and nearly identical complexity for all the other operations.
+
+Here is some rough sample code to exercise the classes above:
+
+`
+- **883** `int main(void)`
+- **884** `{`
+- **885** `IndexedMap t;`
+- **886** ``
+- **887** `for (int i = 0; i  0; i-=2)`
+- **891** `t.Insert(std::make_pair(i,i*i));`
+- **892** ``
+- **893** ``
+- **894** `for (int i = 0; i second!=i*i) || (k!=i))`
+- **901** `std::cout ::Iterator cur = t.begin(), last = t.end();`
+- **906** ``
+- **907** ``
+- **908** `for (int j = 0, k = 0; cur!=last;  j+=2, k++)`
+- **909** `{`
+- **910** `if ((*t.GetByIndex(k)).first!=j)`
+- **911** `std::cout first second << std::endl;`
+- **924** `cur++;`
+- **925** `}`
+- **926** `return 0;`
+- **927** `}`
+`
+
+---

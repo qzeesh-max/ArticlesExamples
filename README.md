@@ -27,9 +27,16 @@ sudo apt-get update && sudo apt-get install -y build-essential cmake libboost-al
 
 ### For Windows
 - **MSYS2** is required.
-- Launch the MSYS2 MINGW64 environment and install dependencies:
+- Launch the MSYS2 MINGW64 or UCRT64 environment and install dependencies:
+
+For **MINGW64**:
 ```bash
-pacman -S mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-boost mingw-w64-x86_64-lua mingw-w64-x86_64-sqlite3
+pacman -S mingw-w64-x86_64-toolchain mingw-w64-x86_64-make mingw-w64-x86_64-cmake mingw-w64-x86_64-boost mingw-w64-x86_64-lua mingw-w64-x86_64-sqlite3
+```
+
+For **UCRT64** (modern/preferred):
+```bash
+pacman -S mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-boost mingw-w64-ucrt-x86_64-lua mingw-w64-ucrt-x86_64-sqlite3
 ```
 > [!NOTE]
 > `liburing` is a Linux-native library, so the `CoroutinesUring` project will be automatically excluded when building on Windows.
@@ -38,7 +45,7 @@ pacman -S mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-boo
 
 | Project Folder | Article Title | C++ Standard | Prerequisites | Summary |
 | --- | --- | --- | --- | --- |
-| [`AggregateReflection`](examples/AggregateReflection) | **C++17/C++20: Reflection of Aggregate-initializable Structures** | C++17 | None | Reflection of structures is often required for mechanisms such as serialization, remote procedure calls, and other similar paradigms, particularly to reduce the boiler plate code. This was typicall... |
+| [`AggregateReflection`](examples/AggregateReflection) | **C++17/C++20: Reflection of Aggregate-initializable Structures** | C++20 | None | Reflection of structures is often required for mechanisms such as serialization, remote procedure calls, and other similar paradigms, particularly to reduce the boiler plate code. This was typicall... |
 | [`Augmentedredblacktree`](examples/Augmentedredblacktree) | **Indexing into Associative Containers and Augmented Red-Black Trees** | C++14 | None | STL – Standard Template Library is a well-known library from point of view of an experienced C++ Software Engineer. It is an extremely useful library providing many different types of generic conta... |
 | [`Constexpr`](examples/Constexpr) | **C++14 constexpr and Compile-time Computations** | C++14 | None | `constexpr`'s were initially introduced in C++11, albeit with a very limited scope. Though they were useful, they could not be used without having to re-factor one's logic into a single `return` st... |
 | [`CoroutinesUring`](examples/CoroutinesUring) | **C++ Coroutines: Use case for Kernel io_uring development** | C++20 | Boost, liburing (Linux only) | Co-routines in C++ are a useful tool for writing easy to read sequential code, without having to write complex state machines, particularly for use cases where readability of the control flow is im... |
